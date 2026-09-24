@@ -75,7 +75,7 @@
   }
 
   .brand-lockup { display: flex; align-items: center; gap: 8px; }
-  .brand-lockup img { height: 26px; width: auto; display: block; }
+  .brand-lockup img { height: 34px; width: auto; display: block; }
 
   .project-picker {
     display: flex;
@@ -179,7 +179,7 @@
     gap: 10px;
   }
   .live-stamp .logo-row { display: flex; align-items: center; }
-  .live-stamp .logo-row img { height: 26px; width: auto; }
+  .live-stamp .logo-row img { height: 36px; width: auto; }
   .live-stamp .info-row { display: flex; align-items: stretch; gap: 9px; }
   .live-stamp .accent-bar { width: 3px; flex: 0 0 auto; background: var(--gold-bright); border-radius: 2px; }
   .live-stamp .text-col { display: flex; flex-direction: column; gap: 3px; justify-content: center; }
@@ -476,10 +476,30 @@
     }
     setMode('permission');
     try {
+      // Ask for the standard wide-angle rear lens at a normal resolution.
+      // Without width/height hints, some phones (notably iPhones with
+      // multiple rear lenses) default to a telephoto/zoomed-in lens.
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          zoom: { ideal: 1 },
+        },
         audio: false,
       });
+
+      // Some browsers expose zoom as a controllable track constraint even
+      // when it wasn't respected at request time — try to force it to 1x.
+      const [track] = stream.getVideoTracks();
+      if (track && typeof track.getCapabilities === 'function') {
+        const caps = track.getCapabilities();
+        if (caps && caps.zoom && caps.zoom.min != null) {
+          try { await track.applyConstraints({ advanced: [{ zoom: caps.zoom.min }] }); }
+          catch (e) { /* not supported on this device, ignore */ }
+        }
+      }
+
       video.srcObject = stream;
       setMode('live');
     } catch (err) {
@@ -496,7 +516,7 @@
     const fontSize = Math.round(w * 0.03);
     const padding = Math.round(fontSize * 0.9);
     const lineHeight = Math.round(fontSize * 1.25);
-    const logoHeight = Math.round(fontSize * 1.9);
+    const logoHeight = Math.round(fontSize * 2.7);
     const logoWidth = logoReady ? logoHeight * (logoImg.width / logoImg.height) : 0;
     const textLeft = padding + logoWidth + (logoReady ? padding * 0.8 : 0);
     const lineCount = lastCoords ? 3 : 2;
@@ -610,16 +630,34 @@
     if (!lastStampedBlob) { showToast('Still processing — try again in a second'); return; }
     const filename = `wade-${projectSelect.value.replace(/\s+/g,'-').toLowerCase()}-${Date.now()}.jpg`;
 
-    try {
-      const downloads = await claude.use('downloads');
-      if (!downloads) {
-        showToast('Save isn\u2019t available in this preview');
-        return;
+    // If running inside Claude's own artifact viewer, use its native save
+    // capability. On a normal website (like this GitHub Pages link) that
+    // API doesn't exist, so fall back to a standard browser download.
+    if (window.claude && typeof window.claude.use === 'function') {
+      try {
+        const downloads = await window.claude.use('downloads');
+        if (downloads) {
+          const result = await downloads.save({ filename, data: lastStampedBlob });
+          showToast(result.status === 'saved' ? 'Photo saved' : 'Photo sent');
+          return;
+        }
+      } catch (err) {
+        if (err && err.code === 'declined') return;
+        // fall through to standard download below
       }
-      const result = await downloads.save({ filename, data: lastStampedBlob });
-      showToast(result.status === 'saved' ? 'Photo saved' : 'Photo sent');
+    }
+
+    try {
+      const url = URL.createObjectURL(lastStampedBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      showToast('Photo saved');
     } catch (err) {
-      if (err && err.code === 'declined') return;
       showToast('Couldn\u2019t save — try again');
     }
   });
